@@ -1,0 +1,10 @@
+pydantic>=2.6
+requests>=2.31
+bittensor==10.5.0
+python-dotenv>=1.0
+numpy==2.2.6
+scikit-learn==1.7.2
+pandas>=2.3.3
+lightgbm==4.6.0
+joblib==1.5.3
+wandb>=0.19
