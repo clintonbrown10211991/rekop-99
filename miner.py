@@ -81,8 +81,16 @@ class Miner(BaseMinerNeuron):
         # Auto-reload when daily_update refreshes the joblib artifact.
         self._model_mtime = _MODEL_PATH.stat().st_mtime if _MODEL_PATH.exists() else 0.0
         threading.Thread(target=self._reload_watcher, daemon=True).start()
+        # Publish the manifest by default. It evaluates to compliance status
+        # "transparent" (all required fields present, no policy violations, no
+        # suspicion flags), and withholding it leaves the miner recorded as
+        # "opaque" with nothing for a reviewer to verify against. Set
+        # POKER44_SEND_MODEL_MANIFEST=0 to withhold it.
+        # Only publish from a commit that exists in the public repo: the manifest
+        # declares the local git HEAD, so serving an unpushed commit would
+        # advertise a revision nobody can resolve.
         self.send_model_manifest = (
-            os.getenv("POKER44_SEND_MODEL_MANIFEST", "0").strip().lower()
+            os.getenv("POKER44_SEND_MODEL_MANIFEST", "1").strip().lower()
             in {"1", "true", "yes", "on"}
         )
         runtime_repo_commit = self._repo_head(repo_root)
