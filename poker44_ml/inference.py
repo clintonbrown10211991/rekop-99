@@ -58,6 +58,9 @@ class Poker44Model:
         # Optional per-model feature subset (axis-ablated diversity members); None = all features.
         fi = art.get("model_feature_idx") or [None] * len(self.models)
         self.feature_idx = list(fi[:len(self.models)]) + [None] * max(0, len(self.models) - len(fi))
+        # Last-query diagnostics (benchmark->live transfer gap). Written by _stash_diag,
+        # read by the miner for logging. Never influences returned scores.
+        self._last_diag: dict = {}
 
     def _rows(self, chunks):
         # Call chunk_features ONCE per chunk. Inside the feature-name loop it re-runs 343x,
@@ -146,6 +149,38 @@ class Poker44Model:
             out[idx] = nh - (i / max(len(rest) - 1, 1)) * (nh - nl) if len(rest) > 1 else nl
         return np.clip(out, 0.0, 1.0)
 
+    def _stash_diag(self, raw, scores):
+        """Cheap per-query transfer-gap diagnostics (score-neutral, fail-safe).
+
+        Pure numpy aggregates over arrays already in memory (~microseconds). It
+        runs AFTER `scores` is finalized and never mutates it, so enabling this
+        cannot change AP/recall/safety. Wrapped so a diagnostics error can never
+        break the response. 'collapse' flags the exact benchmark->live failure
+        signature (raw scores with ~no spread) that competitors debug for.
+        """
+        try:
+            r = np.asarray(raw, dtype=np.float64)
+            s = np.asarray(scores, dtype=np.float64)
+            n = int(r.size)
+            if n == 0:
+                self._last_diag = {"n": 0}
+                return
+            p10, p90 = float(np.quantile(r, 0.10)), float(np.quantile(r, 0.90))
+            std = float(r.std())
+            self._last_diag = {
+                "n": n,
+                "raw_mean": round(float(r.mean()), 5),
+                "raw_std": round(std, 5),
+                "raw_min": round(float(r.min()), 5),
+                "raw_max": round(float(r.max()), 5),
+                "raw_p90": round(p90, 5),
+                "raw_spread_p90_p10": round(p90 - p10, 5),
+                "hard_flags": int((s >= 0.5).sum()),
+                "collapse": bool(std < 0.02 or float(r.max()) < 0.10),
+            }
+        except Exception:
+            self._last_diag = {}
+
     def predict_chunk_scores(self, chunks):
         if not chunks:
             return []
@@ -158,6 +193,7 @@ class Poker44Model:
             raw = np.array([((i * 2654435761) % 997) / 997.0 for i in range(n)], dtype=np.float64)
         mode = SAFETY_MODE if SAFETY_MODE in ("band", "adaptive") else "honest"
         scores = self._safe_topk(raw, mode)
+        self._stash_diag(raw, scores)  # score-neutral; must stay AFTER scores is built
         return [round(float(s), 6) for s in scores]
 
     def predict_chunk_score(self, chunk):

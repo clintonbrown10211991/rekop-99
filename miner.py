@@ -289,6 +289,21 @@ class Miner(BaseMinerNeuron):
             f"mean={mean_score:.4f} first_scores={[round(score, 4) for score in scores[:20]]}",
             flush=True,
         )
+        # Transfer-gap diagnostics. Read-only from the model's stashed aggregates;
+        # wrapped so logging can never affect the response that was already built.
+        try:
+            d = getattr(self.model, "_last_diag", {}) or {}
+            if d.get("n"):
+                warn = "  <<< COLLAPSE (live scores not separating)" if d.get("collapse") else ""
+                print(
+                    f"[DIAG] n={d.get('n')} raw_mean={d.get('raw_mean')} raw_std={d.get('raw_std')} "
+                    f"raw_min={d.get('raw_min')} raw_max={d.get('raw_max')} "
+                    f"raw_p90={d.get('raw_p90')} raw_spread={d.get('raw_spread_p90_p10')} "
+                    f"hard_flags={d.get('hard_flags')}{warn}",
+                    flush=True,
+                )
+        except Exception:
+            pass
         return synapse
 
     async def blacklist(self, synapse: DetectionSynapse) -> Tuple[bool, str]:
