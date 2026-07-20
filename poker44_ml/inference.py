@@ -150,23 +150,29 @@ class Poker44Model:
         return np.average(matrix, axis=0, weights=self.weights)
 
     def _adaptive_k(self, p):
-        """Optimal safety-cap flag count: the LARGEST K that still guarantees
-        threshold_sanity=1.0 on a balanced paper.
+        """Flag the top 10% of the served batch (10 chunks at n=100).
 
-        Safety=1.0 requires hard_fpr = flagged_humans / n_humans <= 0.10. With
-        >=1 bot flagged (tp>=1), flagged_humans <= K-1, and n_humans ~ n/2, so we
-        need K-1 <= 0.10*(n/2) = 0.05n  ->  K = floor(0.05n) + 1  (= 6 at n=100).
-        Within this bound, LARGER K strictly lowers the tp=0 forfeit tail
-        (P(top-K all human) shrinks) while safety stays pinned at 1.0; AP and
-        recall@FPR are rank-based and ignore K entirely. So the confidence walk
-        the old version did was strictly suboptimal (it shrank K, raising forfeit
-        risk). K=6 is the sweet spot: K=7 would let tp=1 give 6 human flags ->
-        fpr 0.12 -> safety 0.978, breaking the guarantee. Floor 2 (n>=8) so a
-        zero-bot forfeit needs the top-K to be ALL human (~1.4% at K=6 vs 25% at
-        K=2 under a random ranking)."""
+        K only moves the human-safety term; AP and recall@FPR read the ranking and
+        ignore it. Two effects pull in opposite directions:
+
+          * larger K lowers the tp=0 forfeit tail (a round where no flagged chunk
+            is a bot scores zero outright), because more flags mean more chances
+            to include one;
+          * larger K raises hard_fpr = flagged_humans / n_humans, and
+            threshold_sanity is 1.0 only while that stays <= 0.10.
+
+        With tp>=1 the flagged humans number at most K-1, so K=10 holds safety at
+        1.0 when the paper carries at least 90 humans, and degrades gracefully
+        otherwise: 0.98 at 78 humans, 0.91 at 50, 0.78 at 30.
+
+        The paper's bot/human split is chosen by the backend and is not visible
+        from here -- the provider only asks for `require_mixed`, never a ratio --
+        so which side of that trade wins cannot be computed offline, only observed
+        from live scores. This setting deliberately buys forfeit protection with
+        safety margin."""
         n = len(p)
         k_min = 2 if n >= 8 else 1
-        k = int(0.05 * n) + 1
+        k = int(0.10 * n)
         return max(k_min, min(k, n))
 
     def _safe_topk(self, p, mode):
