@@ -98,30 +98,24 @@ class Poker44Model:
         return np.average(matrix, axis=0, weights=self.weights)
 
     def _adaptive_k(self, p):
-        """Confidence-adaptive flag count (safety-first, composite-neutral).
+        """Optimal safety-cap flag count: the LARGEST K that still guarantees
+        threshold_sanity=1.0 on a balanced paper.
 
-        Ranking metrics ignore K entirely; K only touches safety. Assuming a
-        ~balanced paper (humans ~ n/2), the 10% allowance permits ~0.05*n
-        expected human flags. We spend at most HALF that budget: extend K down
-        the ranking while the accumulated expected-false-positive mass
-        sum(1 - p_i) stays within 0.025*n. Bounds: [2 (n>=8) else 1, ceil(0.20n)].
-        Worst case (badly miscalibrated model, all flags human at the 20% cap):
-        fpr = 0.4 -> safety 0.67 -> no forfeit possible."""
+        Safety=1.0 requires hard_fpr = flagged_humans / n_humans <= 0.10. With
+        >=1 bot flagged (tp>=1), flagged_humans <= K-1, and n_humans ~ n/2, so we
+        need K-1 <= 0.10*(n/2) = 0.05n  ->  K = floor(0.05n) + 1  (= 6 at n=100).
+        Within this bound, LARGER K strictly lowers the tp=0 forfeit tail
+        (P(top-K all human) shrinks) while safety stays pinned at 1.0; AP and
+        recall@FPR are rank-based and ignore K entirely. So the confidence walk
+        the old version did was strictly suboptimal (it shrank K, raising forfeit
+        risk). K=6 is the sweet spot: K=7 would let tp=1 give 6 human flags ->
+        fpr 0.12 -> safety 0.978, breaking the guarantee. Floor 2 (n>=8) so a
+        zero-bot forfeit needs the top-K to be ALL human (~1.4% at K=6 vs 25% at
+        K=2 under a random ranking)."""
         n = len(p)
         k_min = 2 if n >= 8 else 1
-        k_max = max(k_min, int(math.ceil(0.20 * n)))
-        order = np.argsort(-p, kind="mergesort")
-        budget = 0.05 * (n / 2.0) * 0.5
-        exp_fp, k = 0.0, k_min
-        for i, idx in enumerate(order[:k_max]):
-            exp_fp += 1.0 - float(p[idx])
-            if i + 1 <= k_min:
-                k = i + 1
-            elif exp_fp <= budget:
-                k = i + 1
-            else:
-                break
-        return max(k, k_min)
+        k = int(0.05 * n) + 1
+        return max(k_min, min(k, n))
 
     def _safe_topk(self, p, mode):
         """152-proof: reward ignores magnitude (AP/recall use ranking; safety uses the
