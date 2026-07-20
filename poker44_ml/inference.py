@@ -62,6 +62,41 @@ class Poker44Model:
         # read by the miner for logging. Never influences returned scores.
         self._last_diag: dict = {}
 
+    PCT_SUFFIX = "__pct"
+
+    @staticmethod
+    def _batch_percentile(raw):
+        """Within-batch percentile rank in [0,1], ties averaged.
+
+        Live play differs from the benchmark at the population level, not just in
+        scale: folds roughly halve, raises all but vanish, calls double. Absolute
+        ratios move with it -- fold_share is already a ratio and still shifted
+        0.62 -> 0.33 -- so ratio features do not survive either. Measured on the
+        captured payloads, a model reading absolute values saturates: every chunk
+        scored 0.92-0.99, std 0.008, i.e. no ranking at all.
+
+        A percentile only encodes "who is more X than whom inside this query", so
+        the whole population moving together leaves it unchanged. Same captures,
+        percentile inputs: std 0.33, spread 0.84, and a clean bimodal split.
+
+        Ties are averaged so a column that is constant across the batch maps to a
+        single value instead of an arbitrary 0..1 ramp of pure noise.
+        """
+        n = raw.shape[0]
+        if n <= 1:
+            return np.full(raw.shape, 0.5, dtype=np.float64)
+        out = np.empty(raw.shape, dtype=np.float64)
+        positions = np.arange(1, n + 1, dtype=np.float64)
+        for col in range(raw.shape[1]):
+            values = raw[:, col]
+            ranks = np.empty(n, dtype=np.float64)
+            ranks[np.argsort(values, kind="mergesort")] = positions
+            uniq, inverse, counts = np.unique(values, return_inverse=True, return_counts=True)
+            totals = np.zeros(len(uniq), dtype=np.float64)
+            np.add.at(totals, inverse, ranks)
+            out[:, col] = ((totals / counts)[inverse] - 1.0) / (n - 1.0)
+        return out
+
     def _rows(self, chunks):
         # Call chunk_features ONCE per chunk. Inside the feature-name loop it re-runs 343x,
         # turning a 90-batch query into 496s > validator timeout 180s -> response discarded -> 0.
@@ -71,10 +106,27 @@ class Poker44Model:
                 feats.append(chunk_features(c))
             except Exception:
                 feats.append({})  # defective chunk -> zero vector; length preservation prevents the 0
-        X = np.array(
-            [[f.get(n, 0.0) for n in self.feature_names] for f in feats],
-            dtype=np.float64,
-        )
+
+        # A column named "<source>__pct" is the within-batch percentile of raw
+        # <source>, so it can only be built once the whole served batch is in hand.
+        direct, derived = [], []
+        for pos, name in enumerate(self.feature_names):
+            if name.endswith(self.PCT_SUFFIX):
+                derived.append((pos, name[: -len(self.PCT_SUFFIX)]))
+            else:
+                direct.append((pos, name))
+
+        X = np.zeros((len(feats), len(self.feature_names)), dtype=np.float64)
+        for pos, name in direct:
+            X[:, pos] = [f.get(name, 0.0) for f in feats]
+        if derived and feats:
+            raw = np.array(
+                [[f.get(src, 0.0) for _, src in derived] for f in feats],
+                dtype=np.float64,
+            )
+            raw = np.nan_to_num(raw, nan=0.0, posinf=0.0, neginf=0.0)
+            X[:, [pos for pos, _ in derived]] = self._batch_percentile(raw)
+
         # RandomForest raises on NaN input -> the whole query dies. Always sanitize.
         return np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
 
