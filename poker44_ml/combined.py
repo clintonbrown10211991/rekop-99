@@ -23,6 +23,8 @@ from poker44_ml.features_leader_full import chunk_features as _leader_full
 from poker44_ml.features_ordering import ordering_features as _ordering_features
 from poker44_ml.features import chunk_features as _our_features
 from poker44_ml.features_selfconsistency import selfconsistency_features as _selfcons
+from poker44_ml.features_secondorder import second_order_features as _secondorder
+from poker44_ml.features_compress import compress_features as _compress
 
 _HONEST_PREFIXES = ("rand_", "potodds_", "state_", "grid_", "simil_")
 
@@ -34,4 +36,6 @@ def chunk_features(chunk):
         if k.startswith(_HONEST_PREFIXES):
             f[k] = v
     f.update(_selfcons(chunk))                        # + 22 self-consistency measures
+    f.update(_secondorder(chunk))                     # + 48 second-order (per-hand stat distributions)
+    f.update(_compress(chunk))                        # + 24 compression / repetition measures
     return f
